@@ -1,0 +1,88 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_has_olsr_ip $HOST_NAME; then
+    echo "OLSRd not set up on the host"
+    exit 1
+fi
+
+if ! tb_host_head_node_exists; then
+    echo "No head node found in testbed"
+    exit 1
+fi
+
+if tb_host_is_client_node $HOST_NAME; then
+    echo "Nimbus client already set up on host"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+HEAD_NODE_IP=$(get_tb_host_wired_ip $(get_testbed_head_node))
+
+echo "copying nimbus client files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "mkdir -p $TB_HOSTS_NIMBUS_DIR
+     mkdir -p $TB_HOSTS_HOME_DIR/.nimbus"
+scp -q $TB_NIMBUS_CLIENT_TAR_FILE $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_CLIENT_DIR.tar.gz
+
+echo "installing dependencies..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "$TB_PKG_MGR_UPDATE_CMD
+     $TB_PKG_MGR_INSTALL_CMD openjdk-6-jre" &> /dev/null
+reboot_and_wait_if_needed $HOST_NAME
+
+echo "setting up rsa keys on host..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "[ -f \$HOME/.ssh/id_rsa ] || ssh-keygen -f \$HOME/.ssh/id_rsa -N ''" > /dev/null
+
+echo "creating new user on head node..."
+tmp_newuser_dir=`mktemp -d /tmp/tbmancn.XXXXXXX`
+ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+    "$TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbus-new-user -d $tmp_newuser_dir $HOST_NAME@$TB_NIMBUS_CLIENT_DOMAIN" \
+    > /dev/null
+
+echo "setting up nimbus client..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "tar -xf $TB_HOSTS_NIMBUS_CLIENT_DIR.tar.gz -C $TB_HOSTS_NIMBUS_DIR"
+
+echo "copying cloud files..."
+scp -q $TB_HOSTS_USERNAME@$HEAD_NODE_IP:$tmp_newuser_dir/* $tmp_newuser_dir/
+scp -q $tmp_newuser_dir/cloud.properties \
+    $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_CLIENT_DIR/conf/
+scp -q $tmp_newuser_dir/*.pem $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_HOME_DIR/.nimbus/
+tmp_certs_dir=`mktemp -d /tmp/tbmancn.XXXXXXXX`
+scp -q $TB_HOSTS_USERNAME@$HEAD_NODE_IP:$TB_HOSTS_NIMBUS_HEAD_DIR/var/ca/trusted-certs/* \
+    $tmp_certs_dir/
+scp -q $tmp_certs_dir/* $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_CLIENT_DIR/lib/certs/
+
+echo "updating hosts file..."
+echo -e "\n# testbed vms" | ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cat - | sudo tee -a /etc/hosts > /dev/null"
+
+echo "updating host list..."
+set_tb_host_as_client_node $HOST_NAME
+
+echo "cleaning up..."
+ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP "rm -rf $tmp_newuser_dir"
+rm -rf $tmp_newuser_dir
+rm -rf $tmp_certs_dir
+
+echo "nimbus client set up on \"$HOST_NAME\""
+
+echo "updating client node settings..."
+$BASH_EXE $TB_MGT_DIR/sbin/update-nimbus-client-node $HOST_NAME
+
+exit 0

@@ -1,0 +1,158 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_has_olsr_ip $HOST_NAME; then
+    echo "OLSRd not set up on the host"
+    exit 1
+fi
+
+if ! tb_host_head_node_exists; then
+    echo "No head node found in testbed"
+    exit 1
+fi
+
+if tb_host_is_vmm_node $HOST_NAME; then
+    echo "Nimbus vmm already set up on host"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+HEAD_NODE_NAME=$(get_testbed_head_node)
+HEAD_NODE_IP=$(get_tb_host_wired_ip $HEAD_NODE_NAME)
+
+if [[ $(ssh $TB_HOSTS_USERNAME@$HOST_IP "egrep -c '(vmx|svm)' /proc/cpuinfo") == 0 ]]; then
+    echo "Error: Host does not support hardware virtualization"
+    exit 1
+fi
+
+if [[ $(ssh $TB_HOSTS_USERNAME@$HOST_IP "egrep -c ' lm ' /proc/cpuinfo") == 0 ]] && \
+    ! prompt_accepted "WARNING: Host does not have 64-bit CPU! Continue anyway?"; then
+    exit 1
+fi
+
+if ! $(ssh $TB_HOSTS_USERNAME@$HOST_IP "uname -m | grep -Fqw \"x86_64\"") && \
+    ! prompt_accepted "WARNING: Host does not have 64-bit OS installed! Continue anyway?"; then
+    exit 1
+fi
+
+echo "copying nimbus client files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "mkdir -p $TB_HOSTS_NIMBUS_SRC_DIR"
+scp -q $TB_NIMBUS_VMM_TAR_FILE $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_VMM_DIR.tar.gz
+
+echo "installing dependencies..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "$TB_PKG_MGR_UPDATE_CMD
+     $TB_PKG_MGR_INSTALL_CMD python-dev
+     command -v kvm > /dev/null 2>&1 || $TB_PKG_MGR_INSTALL_CMD qemu-kvm
+     command -v libvirtd > /dev/null 2>&1 || $TB_PKG_MGR_INSTALL_CMD libvirt-bin
+     command -v ubuntu-vm-builder > /dev/null 2>&1 || $TB_PKG_MGR_INSTALL_CMD ubuntu-vm-builder
+     command -v tunctl > /dev/null 2>&1 || $TB_PKG_MGR_INSTALL_CMD uml-utilities
+     command -v dhcpd > /dev/null 2>&1 || $TB_PKG_MGR_INSTALL_CMD isc-dhcp-server
+     $TB_PKG_MGR_INSTALL_CMD pm-utils" \
+	 &> /dev/null
+reboot_and_wait_if_needed $HOST_NAME
+
+echo "adding user to libvirt and kvm groups..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo adduser $TB_HOSTS_USERNAME libvirtd
+     sudo adduser $TB_HOSTS_USERNAME kvm" > /dev/null
+
+if ! $(ssh $TB_HOSTS_USERNAME@$HOST_IP "kvm-ok | grep 'KVM acceleration can be used' > /dev/null"); then
+    echo "Error: Hardware virtualization not enabled in the BIOS"
+    ssh $TB_HOSTS_USERNAME@$HOST_IP "kvm-ok"
+    exit 1
+fi
+
+echo "copying kvm/libvirtd configuration files..."
+tmp_libvirt_dir=$(ssh $TB_HOSTS_USERNAME@$HOST_IP "mktemp -d /tmp/tbmanvn.XXXXXXX")
+scp -q $TB_MGT_DIR/dist/nimbus/vmm/libvirt/* $TB_HOSTS_USERNAME@$HOST_IP:$tmp_libvirt_dir/
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo cp $tmp_libvirt_dir/* /etc/libvirt/
+     sudo restart libvirt-bin"
+
+echo "setting up nimbus vmm..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "tar -xf $TB_HOSTS_NIMBUS_VMM_DIR.tar.gz -C $TB_HOSTS_NIMBUS_SRC_DIR
+     sudo mkdir -p /opt/nimbus
+     sudo mv $TB_HOSTS_NIMBUS_VMM_DIR/workspace-control/* /opt/nimbus/"
+
+echo "updating vmm node settings..."
+set_tb_host_as_vmm_node $HOST_NAME
+$BASH_EXE $TB_MGT_DIR/sbin/update-nimbus-vmm-node $HOST_NAME
+unset_tb_host_as_vmm_node $HOST_NAME
+
+echo "setting permissions..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cd /opt/nimbus/
+     sudo chown -R root bin etc lib libexec src
+     sudo chown -R $TB_HOSTS_USERNAME var
+     sudo find . -type d -exec chmod 775 {} \;
+     sudo find . -type f -exec chmod 664 {} \;
+     sudo find bin sbin libexec -iname \"*sh\" -exec chmod 755 {} \;"
+
+echo "testing dependencies..."
+if ! ssh $TB_HOSTS_USERNAME@$HOST_IP "/opt/nimbus/sbin/test-dependencies.sh" > /dev/null; then
+    echo "Error: Dependency script failed"
+    exit 1
+fi
+
+# Workaround for issue described here (except Ubuntu uses apparmor instead of SELinux): 
+# http://wiki.libvirt.org/page/Guest_won%27t_start_-_warning:_could_not_open_/dev/net/tun_%28%27generic_ethernet%27_interface%29
+echo "removing apparmor..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "command -v apparmor_status > /dev/null 2>&1 && $TB_PKG_MGR_REMOVE_CMD apparmor
+     true" &> /dev/null
+reboot_and_wait $HOST_NAME
+
+echo "testing VM creation..."
+ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+    "cat $TB_HOSTS_NIMBUS_HEAD_DIR/services/var/nimbus/control.netsample.txt" | \
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cat - > /tmp/control.netsample.txt"
+scp -q $TB_MGT_DIR/dist/nimbus/vmm/ubuntu10.10.gz $TB_HOSTS_USERNAME@$HOST_IP:/tmp/
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cd /tmp/
+     gunzip -f ubuntu10.10.gz"
+if ! $(ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "/opt/nimbus/sbin/control-test.sh --image /tmp/ubuntu10.10 --netsample \
+         /tmp/control.netsample.txt --memory 256 --mountpoint hda" &> /dev/null); then
+    ssh $TB_HOSTS_USERNAME@$HOST_IP "/opt/nimbus/sbin/destroy-control-test.sh" &> /dev/null
+    echo "Error: control-test.sh failed to run properly"
+    exit 1
+fi
+sleep 10 # Wait for VM to boot
+if ! $(ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "ping -c 1 \$(grep ip /tmp/control.netsample.txt | awk '{print \$2}')" > /dev/null); then
+    ssh $TB_HOSTS_USERNAME@$HOST_IP "/opt/nimbus/sbin/destroy-control-test.sh" &> /dev/null
+    echo "Error: Failed to ping test VM"
+    exit 1
+fi
+ssh $TB_HOSTS_USERNAME@$HOST_IP "/opt/nimbus/sbin/destroy-control-test.sh" &> /dev/null
+
+echo "updating host list..."
+set_tb_host_as_vmm_node $HOST_NAME
+
+echo "cleaning up..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "rm -rf $tmp_libvirt_dir
+     rm -f /tmp/control.netsample.txt
+     rm -f /tmp/ubuntu10.10"
+
+echo "nimbus vmm set up on \"$HOST_NAME\""
+
+$BASH_EXE $TB_MGT_DIR/sbin/connect-nimbus-vmm-to-head $HOST_NAME
+
+exit 0

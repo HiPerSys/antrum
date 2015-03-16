@@ -1,0 +1,9 @@
+type: nimbus
+host: @HEAD_NODE@
+port: 8444
+secure: True
+image_generation: True
+factory_identity: @FACTORY_ID@
+factory_port: 8443
+repository_port: 8888
+mount_as: hda

@@ -1,0 +1,86 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_has_olsr_ip $HOST_NAME; then
+    echo "OLSRd not set up on the host"
+    exit 1
+fi
+
+if tb_host_head_node_exists; then
+    echo "Head node already exists"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+echo "copying nimbus iaas files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "mkdir -p $TB_HOSTS_NIMBUS_DIR
+     mkdir -p $TB_HOSTS_NIMBUS_HEAD_DIR
+     mkdir -p $TB_HOSTS_NIMBUS_SRC_DIR"
+scp -q $TB_NIMBUS_HEAD_TAR_FILE $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_HEAD_SRC_DIR.tar.gz
+
+echo "installing dependencies..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "$TB_PKG_MGR_UPDATE_CMD
+     $TB_PKG_MGR_INSTALL_CMD openjdk-6-jdk
+     $TB_PKG_MGR_INSTALL_CMD python-dev
+     $TB_PKG_MGR_INSTALL_CMD python-twisted-web
+     $TB_PKG_MGR_INSTALL_CMD sqlite3
+     $TB_PKG_MGR_INSTALL_CMD gcc
+     $TB_PKG_MGR_INSTALL_CMD libssl-dev
+     $TB_PKG_MGR_INSTALL_CMD ant-optional" &> /dev/null
+reboot_and_wait_if_needed $HOST_NAME
+
+# Workaround for bug described here: https://bugs.launchpad.net/ubuntu/+source/python2.7/+bug/1115466
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo ln -s /usr/lib/python2.7/plat-*/_sysconfigdata_nd.py /usr/lib/python2.7/" &> /dev/null || :
+
+echo "installing nimbus..."
+# Workaround for issue where prompts aren't outputted until input is received
+while ! prompt_accepted \
+    "During the following setup, the script will pause to wait for input
+(right after \"Configuring installed services\"), but will not output a prompt.
+Simply press Enter twice at this point to allow the script to proceed. Understand?"; do
+    : # loop until prompt is accepted
+done
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "tar -xf $TB_HOSTS_NIMBUS_HEAD_SRC_DIR.tar.gz -C $TB_HOSTS_NIMBUS_SRC_DIR
+     cd $TB_HOSTS_NIMBUS_HEAD_SRC_DIR; ./install $TB_HOSTS_NIMBUS_HEAD_DIR"
+
+echo "setting up rsa key pair..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "[ -f \$HOME/.ssh/id_rsa ] || ssh-keygen -f \$HOME/.ssh/id_rsa -N ''" > /dev/null
+
+echo "updating host list..."
+set_tb_host_as_head_node $HOST_NAME
+
+echo "\"$HOST_NAME\" set up as head node"
+
+echo "setting up nimbus to run on startup..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo sed -i \"s|^exit 0$|su $TB_HOSTS_USERNAME -c '$TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl start'\n&|\" /etc/rc.local"
+
+echo "updating head node settings..."
+$BASH_EXE $TB_MGT_DIR/sbin/update-nimbus-head-node
+
+if tb_host_vmm_node_exists && prompt_accepted "VMM nodes exist, connect to them?"; then
+    for host in $(get_testbed_vmm_nodes); do
+	echo "for host \"$host\":"
+	$BASH_EXE $TB_MGT_DIR/sbin/connect-nimbus-vmm-to-head $host
+    done
+fi
+
+exit 0

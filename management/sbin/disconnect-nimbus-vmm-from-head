@@ -1,0 +1,67 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_is_vmm_node $HOST_NAME; then
+    echo "Nimbus vmm not set up on host"
+    exit 1
+fi
+
+if ! tb_host_head_node_exists; then
+    echo "No head node found in testbed"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+HEAD_NODE_NAME=$(get_testbed_head_node)
+HEAD_NODE_IP=$(get_tb_host_wired_ip $HEAD_NODE_NAME)
+
+if ! is_vmm_connected_to_head $HOST_NAME; then
+   echo "host \"$HOST_NAME\" not connected to head node"
+   exit 1
+fi
+
+echo "removing host \"$HOST_NAME\" from head node list..."
+if [[ $(ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+    "$TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbus-admin --list --host $HOST_NAME 2>&1") != \
+    "No vms with host $HOST_NAME found" ]]; then
+    if ! prompt_accepted "WARNING: VMs running on host \"$HOST_NAME\"! Continue anyway (and destroy VMs)?"; then
+	exit 1
+    fi
+    ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+	"[[ \$($TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl services status | \
+             awk '{print \$3}') == \"running\" ]] || \
+             $TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl services start
+         $TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbus-admin --shutdown --host $HOST_NAME --force"
+fi
+ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+    "[[ \$($TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl services status | \
+         awk '{print \$3}') == \"running\" ]] || \
+         $TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl services start
+     $TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbus-nodes --remove $HOST_NAME" > /dev/null
+
+echo "removing public keys from authorized keys of hosts..."
+ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+    "sed -i \"/^.*$TB_HOSTS_USERNAME@$HOST_NAME\$/d\" \$HOME/.ssh/authorized_keys
+     sed -i \"/ $HOST_NAME$/,+1d\" \$HOME/.ssh/config
+     [ ! -f \$HOME/.ssh/known_hosts ] || ssh-keygen -R $HOST_NAME" &> /dev/null
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sed -i \"/^.*$TB_HOSTS_USERNAME@$HEAD_NODE_NAME\$/d\" \$HOME/.ssh/authorized_keys
+     sed -i \"/ $HEAD_NODE_NAME$/,+1d\" \$HOME/.ssh/config
+     [ ! -f \$HOME/.ssh/known_hosts ] || ssh-keygen -R $HEAD_NODE_NAME" &> /dev/null
+
+echo "vmm node \"$HOST_NAME\" disconnected from head node"
+
+exit 0

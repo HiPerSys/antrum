@@ -1,0 +1,57 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_has_olsr_ip $HOST_NAME; then
+    echo "OLSRd not set up on the host"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+if ! prompt_accepted "Remove OLSRd from host \"$HOST_NAME\"?"; then
+    exit 1
+fi
+
+echo "killing olsrd..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "pgrep olsrd > /dev/null && sudo killall olsrd" || true
+
+echo "updating network interfaces file..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "sudo sed -i \"/olsr network interface/,/^[[:blank:]]*$/d\" /etc/network/interfaces"
+
+echo "removing files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo rm -f /usr/bin/olsrd
+     sudo update-rc.d -f olsrd remove
+     sudo rm -f /etc/init.d/olsrd
+     rm -rf $TB_HOSTS_OLSR_DIR" > /dev/null
+
+echo "removing dependencies..."
+if prompt_accepted "bison and flex were installed for OLSRd, but are no longer needed. Remove?"; then
+    echo "removing bison and flex..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP "$TB_PKG_MGR_REMOVE_CMD bison flex" &> /dev/null
+    reboot_and_wait_if_needed $HOST_NAME
+fi
+
+echo "removing host olsrd data from hosts lists..."
+set_tb_host_olsr_ip $HOST_NAME "NONE"
+set_tb_host_wifi_iface $HOST_NAME "NONE"
+sudo sed -i "/^.*$HOST_NAME$/d" /etc/hosts
+
+echo "olsrd removed on \"$HOST_NAME\""
+
+echo "updating hosts..."
+$BASH_EXE $TB_MGT_DIR/sbin/update-hosts
+
+exit 0

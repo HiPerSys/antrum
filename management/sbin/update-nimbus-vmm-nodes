@@ -1,0 +1,13 @@
+#!/bin/bash
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+echo "updating vmm node settings..."
+for host in $(get_testbed_vmm_nodes); do
+    echo "updating host \"$host\"..."
+    $BASH_EXE $TB_MGT_DIR/sbin/update-nimbus-vmm-node $host
+done
+
+exit 0

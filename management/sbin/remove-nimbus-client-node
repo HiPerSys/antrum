@@ -1,0 +1,52 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_is_client_node $HOST_NAME; then
+    echo "Nimbus client not set up on host"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+HEAD_NODE_IP=$(get_tb_host_wired_ip $(get_testbed_head_node))
+
+if ! prompt_accepted "Remove Nimbus client from host \"$HOST_NAME\"?"; then
+    exit 1
+fi
+
+echo "removing files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "rm -rf $TB_HOSTS_NIMBUS_CLIENT_DIR
+     rm -rf $TB_HOSTS_HOME_DIR/.nimbus
+     rm -rf $TB_HOSTS_NIMBUS_CLIENT_DIR.tar.gz
+     sudo rm -f $TB_HOSTS_EXTRA_SCRIPTS_DIR/*-host-entry"
+
+if tb_host_head_node_exists; then
+    echo "removing user from head node..."
+    ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+	"$TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbus-remove-user $HOST_NAME@$TB_NIMBUS_CLIENT_DOMAIN"
+fi
+
+echo "updating hosts file..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo sed -i \"/testbed vms/,/^[[:blank:]]*$/d\" /etc/hosts"
+
+echo "updating host list..."
+unset_tb_host_as_client_node $HOST_NAME
+
+echo "nimbus client removed from \"$HOST_NAME\""
+
+echo "script complete"
+exit 0

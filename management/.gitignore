@@ -1,0 +1,7 @@
+main.conf
+var/
+
+*.tar.gz
+
+dist/nimbus/head/network/
+

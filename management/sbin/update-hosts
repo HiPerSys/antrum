@@ -1,0 +1,26 @@
+#!/bin/bash
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+echo "updating hosts files..."
+for host in $(cut -f1 $TB_HOSTS_FILE); do
+    echo "updating $host's host file..."
+    host_ip=$(get_tb_host_wired_ip $host)
+    tmp_hosts=`mktemp /tmp/tbmuh.XXXXXXX`
+    scp -q $TB_HOSTS_USERNAME@$host_ip:/etc/hosts $tmp_hosts
+    sed -i "/testbed wired network/,/^[[:blank:]]*$/d" $tmp_hosts 
+    sed -i "/testbed olsr network/,/^[[:blank:]]*$/d" $tmp_hosts
+    sed -i '/^[[:space:]]*$/{:a;$d;N;/\n[[:space:]]*$/ba}' $tmp_hosts
+    echo >> $tmp_hosts
+    sed -n "/testbed wired network/,/^[[:blank:]]*$/p" /etc/hosts >> $tmp_hosts
+    sed -n "/testbed olsr network/,/^[[:blank:]]*$/p" /etc/hosts >> $tmp_hosts
+    cat $tmp_hosts | ssh $TB_HOSTS_USERNAME@$host_ip "cat - | sudo tee /etc/hosts > /dev/null"
+    
+    echo "cleaning up..."
+    rm -f $tmp_hosts
+done
+
+echo "script complete"
+exit 0

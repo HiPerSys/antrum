@@ -1,0 +1,72 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+if ! tb_host_head_node_exists; then
+    echo "No head node found in testbed"
+    exit 1
+fi
+
+HOST_NAME=$(get_testbed_head_node)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+if ! prompt_accepted "Remove Nimbus head node?"; then
+    exit 1
+fi
+
+if tb_host_vmm_node_exists && prompt_accepted "VMM nodes exist, remove them?"; then
+    for host in $(get_testbed_vmm_nodes); do
+	echo "removing Nimbus VMM from host \"$host\""
+	$BASH_EXE $TB_MGT_DIR/sbin/remove-nimbus-vmm-node $host
+    done
+else
+    for host in $(get_testbed_vmm_nodes); do
+	if is_vmm_connected_to_head $HOST_NAME; then
+	    echo "for host \"$host\":"
+	    $BASH_EXE $TB_MGT_DIR/sbin/disconnect-nimbus-vmm-from-head $host
+	fi
+    done
+fi  
+
+if tb_host_client_node_exists && ( prompt_accepted "Client nodes exist, remove them?" || \
+    prompt_accepted "Current client nodes cannot be reconnected to a new head node. Remove them?" ); then
+    for host in $(get_testbed_client_nodes); do
+	echo "removing Nimbus client from host \"$host\""
+	$BASH_EXE $TB_MGT_DIR/sbin/remove-nimbus-client-node $host
+    done
+fi
+
+if tb_host_phantom_vm_exists && ( prompt_accepted "Phantom setup exists, remove it?" || \
+    prompt_accepted "Current Phantom setup will not work with a new head node. Remove it?" ); then
+    echo "removing phantom vm setup"
+    $BASH_EXE $TB_MGT_DIR/sbin/remove-phantom-vm-setup
+fi
+
+echo "stopping nimbus..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "$TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl stop"
+
+echo "unsetting up nimbus to run on startup..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "sudo sed -i \"/nimbusctl start/d\" /etc/rc.local"
+
+echo "removing files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "rm -rf $TB_HOSTS_NIMBUS_HEAD_DIR
+     rm -rf $TB_HOSTS_NIMBUS_SRC_DIR"
+
+echo "removing dependencies..."
+if prompt_accepted "ant-optional was installed for Nimbus, but is no longer needed. Remove?"; then
+    echo "removing ant-optional..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP "$TB_PKG_MGR_REMOVE_CMD ant-optional" &> /dev/null
+    reboot_and_wait_if_needed $HOST_NAME
+fi
+
+echo "updating host list..."
+unset_tb_host_as_head_node $HOST_NAME
+
+echo "nimbus removed from \"$HOST_NAME\""
+
+echo "script complete"
+exit 0

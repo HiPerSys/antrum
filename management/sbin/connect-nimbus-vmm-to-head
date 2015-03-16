@@ -1,0 +1,89 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_is_vmm_node $HOST_NAME; then
+    echo "Nimbus vmm not set up on host"
+    exit 1
+fi
+
+if ! tb_host_head_node_exists; then
+    echo "No head node found in testbed"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+HEAD_NODE_NAME=$(get_testbed_head_node)
+HEAD_NODE_IP=$(get_tb_host_wired_ip $HEAD_NODE_NAME)
+
+if is_vmm_connected_to_head $HOST_NAME; then
+   echo "host \"$HOST_NAME\" already connected to head node"
+   exit 1
+fi
+
+echo "exchanging public keys..."
+ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+    "echo -e \"Host $HOST_NAME\n\tStrictHostKeyChecking no\" >> \$HOME/.ssh/config"
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "echo -e \"Host $HEAD_NODE_NAME\n\tStrictHostKeyChecking no\" >> \$HOME/.ssh/config
+     [ -f \$HOME/.ssh/id_rsa ] || ssh-keygen -f \$HOME/.ssh/id_rsa -N ''" > /dev/null
+ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP "cat \$HOME/.ssh/id_rsa.pub" | \
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sed -i \"/^.*$TB_HOSTS_USERNAME@$HEAD_NODE_NAME\$/d\" \$HOME/.ssh/authorized_keys
+     cat - >> \$HOME/.ssh/authorized_keys"
+ssh $TB_HOSTS_USERNAME@$HOST_IP "cat \$HOME/.ssh/id_rsa.pub" | \
+    ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+    "sed -i \"/^.*$TB_HOSTS_USERNAME@$HOST_NAME\$/d\" \$HOME/.ssh/authorized_keys 
+     cat - >> \$HOME/.ssh/authorized_keys"
+
+echo "connecting host \"$HOST_NAME\" to head node..."
+host_mem=`echo $(($(ssh $TB_HOSTS_USERNAME@$HOST_IP "cat /proc/meminfo" \
+    | grep 'MemTotal' | awk '{print $2}') / 1024))`
+read -p "Enter the amount of memory to allocate to VMs (maximum is $host_mem): " input_host_mem
+if [[ $input_host_mem -lt $host_mem && $input_host_mem -gt 0 ]]; then
+    host_mem=$input_host_mem
+else
+    echo "Invalid response, defaulting to $host_mem"
+fi
+if ! $(ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+    "[ -f $TB_HOSTS_NIMBUS_HEAD_DIR/services/share/nimbus-autoconfig/autoconfig-decisions.sh ]"); then
+    tmp_autoconf_vals=`mktemp /tmp/tbmcnvth.XXXXXXX`
+    cp $TB_MGT_DIR/dist/nimbus/head/autoconfig-decisions.sh.template $tmp_autoconf_vals
+    sed -i "s/@USER@/$TB_HOSTS_USERNAME/g" $tmp_autoconf_vals
+    sed -i "s/@HOST@/$HEAD_NODE_NAME/g" $tmp_autoconf_vals
+    sed -i "s/@VMM_HOST@/$HOST_NAME/g" $tmp_autoconf_vals
+    sed -i "s/@MAX_RAM@/$host_mem/g" $tmp_autoconf_vals
+    scp -q $tmp_autoconf_vals \
+	$TB_HOSTS_USERNAME@$HEAD_NODE_IP:$TB_HOSTS_NIMBUS_HEAD_DIR/services/share/nimbus-autoconfig/autoconfig-decisions.sh
+    ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+	"[[ \$($TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl services status | \
+             awk '{print \$3}') == \"running\" ]] || \
+             $TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl services start
+         $TB_HOSTS_NIMBUS_HEAD_DIR/services/share/nimbus-autoconfig/autoconfig-adjustments.sh > /dev/null
+         $TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl services restart"
+else
+    ssh $TB_HOSTS_USERNAME@$HEAD_NODE_IP \
+	"[[ \$($TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl services status | \
+             awk '{print \$3}') == \"running\" ]] || \
+             $TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl services start
+         $TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbus-nodes --add $HOST_NAME --memory $host_mem" > /dev/null
+fi
+
+echo "cleaning up..."
+rm -f $tmp_autoconf_vals
+
+echo "vmm node \"$HOST_NAME\" connected to head node"
+
+exit 0

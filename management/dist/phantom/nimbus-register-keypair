@@ -1,0 +1,49 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import base64
+import boto
+from boto.ec2.regioninfo import RegionInfo
+import urllib2
+
+def pgm_help():
+    print "Register a public key with the Nimbus cloud"
+    print "<keyname> <path to public key file>"
+    sys.exit(1)
+
+if len(sys.argv) != 3:
+    print "Wrong number of arguments %d" % (len(sys.argv))
+    pgm_help()
+
+env_keys = ['NIMBUS_IAAS_ACCESS_KEY','NIMBUS_IAAS_SECRET_KEY',]
+for ek in env_keys:
+    if ek not in os.environ:
+        print "The environment variable %s must be set" % (ek)
+        sys.exit(1)
+
+keyname = sys.argv[1].strip()
+fname = sys.argv[2].strip()
+if not os.path.exists(fname):
+    print "The file %s does not exist" % (fname)
+    sys.exit(1)
+
+port = 8444
+if 'NIMBUS_HOSTNAME' in os.environ:
+    nimbus_host = os.environ['NIMBUS_HOSTNAME']
+    ndx = nimbus_host.find(':')
+    if ndx > 0:
+        port = int(nimbus_host[ndx+1:])
+        nimbus_host = nimbus_host[:ndx]
+
+region = RegionInfo(name="nimbus", endpoint=nimbus_host)
+ec2conn = boto.connect_ec2(os.environ['NIMBUS_IAAS_ACCESS_KEY'], os.environ['NIMBUS_IAAS_SECRET_KEY'], region=region, port=port, validate_certs=False)
+
+keytext = open(fname).read()
+#keytext = base64.b64encode(keytext)
+ec2conn.import_key_pair(keyname, keytext)
+
+print "Registering the key name %s as:" % (keyname)
+print keytext
+
+sys.exit(0)

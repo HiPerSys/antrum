@@ -1,0 +1,83 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_has_olsr_ip $HOST_NAME; then
+    echo "OLSRd not set up on the host"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+echo "setting up network..."
+scp -q $TB_MGT_DIR/dist/olsrd/olsrd-adhoc-setup \
+    $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_OLSRD_DIR/files/olsrd-adhoc-setup
+tmp_network_info=`mktemp /tmp/tbmuoh.XXXXXXX`
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo $TB_HOSTS_OLSRD_DIR/files/olsrd-adhoc-setup \"\" $TB_OLSR_CHANNEL $TB_OLSR_ESSID $TB_OLSR_BSSID " \
+    &> $tmp_network_info
+HOST_OLSR_IP=`cat $tmp_network_info | grep "with IP" | sed 's/.*with IP //'`
+HOST_WIFI_IFACE=`cat $tmp_network_info | grep "with IP" | sed 's/.*setup on //' | awk '{print $1;}'`
+
+echo "adding olsr data to hosts lists..."
+set_tb_host_olsr_ip $HOST_NAME $HOST_OLSR_IP
+set_tb_host_wifi_iface $HOST_NAME $HOST_WIFI_IFACE
+grep -Fqw "$HOST_OLSR_IP" /etc/hosts || \
+    sudo sed -i "/testbed olsr network/a $HOST_OLSR_IP\t$HOST_NAME" /etc/hosts
+
+echo "killing olsrd..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "pgrep olsrd > /dev/null && sudo killall olsrd" || true
+
+echo "updating configuration files..."
+scp -q $TB_MGT_DIR/dist/olsrd/$TB_OLSRD_CONFIG_FILE_NAME \
+    $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_OLSRD_DIR/
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo mkdir -p /etc/olsrd
+     sudo cp $TB_HOSTS_OLSRD_DIR/$TB_OLSRD_CONFIG_FILE_NAME /etc/olsrd/olsrd.conf"
+
+echo "starting olsrd..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "sudo $TB_HOSTS_OLSRD_DIR/olsrd -i $HOST_WIFI_IFACE" &> /dev/null
+
+echo "updating network interfaces file..."
+tmp_network_ifaces=`mktemp /tmp/tbmuoh.XXXXXXXX`
+scp -q $TB_HOSTS_USERNAME@$HOST_IP:/etc/network/interfaces $tmp_network_ifaces
+sed -i "/auto $HOST_WIFI_IFACE/,/^[[:blank:]]*$/d" $tmp_network_ifaces
+sed -i "/olsr network interface/,/^[[:blank:]]*$/d" $tmp_network_ifaces
+sed -i '/^[[:space:]]*$/{:a;$d;N;/\n[[:space:]]*$/ba}' $tmp_network_ifaces
+echo -e "\n# The olsr network interface" >> $tmp_network_ifaces
+echo -e "auto $HOST_WIFI_IFACE\niface $HOST_WIFI_IFACE inet static" >> $tmp_network_ifaces
+echo -e "\taddress $HOST_OLSR_IP" >> $tmp_network_ifaces
+echo -e "\tnetmask $TB_OLSR_NETMASK" >> $tmp_network_ifaces
+echo -e "\twireless-channel $TB_OLSR_CHANNEL" >> $tmp_network_ifaces
+echo -e "\twireless-essid $TB_OLSR_ESSID" >> $tmp_network_ifaces
+echo -e "\twireless-mode ad-hoc" >> $tmp_network_ifaces
+cat $tmp_network_ifaces | ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cat - | sudo tee /etc/network/interfaces > /dev/null"
+
+echo "updating startup script..."
+tmp_olsrd_startup=`mktemp /tmp/tbmuoh.XXXXXXXXX`
+cp $TB_MGT_DIR/dist/olsrd/olsrd-startup-script.template $tmp_olsrd_startup
+sed -i "s/@IFACE@/$HOST_WIFI_IFACE/g" $tmp_olsrd_startup
+cat $tmp_olsrd_startup | ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cat - | sudo tee /etc/init.d/olsrd > /dev/null
+     sudo chmod +x /etc/init.d/olsrd
+     sudo update-rc.d olsrd defaults 99" > /dev/null
+
+echo "cleaning up..."
+rm -f $tmp_network_info
+rm -f $tmp_network_ifaces
+rm -f $tmp_olsrd_startup
+
+echo "script complete"
+exit 0

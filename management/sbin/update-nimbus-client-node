@@ -1,0 +1,35 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_is_client_node $HOST_NAME; then
+    echo "Nimbus client not set up on host"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+echo "updating cloudclient.sh..."
+tmp_cc_dir=$(ssh $TB_HOSTS_USERNAME@$HOST_IP "mktemp -d /tmp/tbmuncn.XXXXXXXX")
+scp -q $TB_MGT_DIR/dist/nimbus/client/cloud-client.sh $TB_HOSTS_USERNAME@$HOST_IP:$tmp_cc_dir/
+scp -q $TB_MGT_DIR/dist/nimbus/client/*-host-entry $TB_HOSTS_USERNAME@$HOST_IP:$tmp_cc_dir/
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo cp $tmp_cc_dir/cloud-client.sh $TB_HOSTS_NIMBUS_CLIENT_DIR/bin/cloud-client.sh
+     sudo cp $tmp_cc_dir/*-host-entry $TB_HOSTS_EXTRA_SCRIPTS_DIR" 
+
+echo "cleaning up..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "rm -rf $tmp_cc_dir"
+
+echo "script complete"
+exit 0

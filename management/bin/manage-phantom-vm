@@ -1,0 +1,46 @@
+#!/bin/bash
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+
+show_help() {
+    echo -e " General:"
+    echo -e "\t-h, --help\t\t\tDisplay this help information"
+    echo -e " Actions:"
+    echo -e "\t-s, --setup [hostname]\t\tSetup to create the Phantom VM using the specified host"
+    echo -e "\t-c, --create\t\t\tCreate the Phantom VM"
+    echo -e "\t-r, --remove\t\t\tRemove the Phantom VM setup"
+    exit 1
+}
+
+ARGS=$(getopt -o s:crh -l setup:,create,remove,help -n $0 -- $@)
+
+if [ $? -ne 0 ]; then
+    exit 1
+fi
+
+eval set -- $ARGS
+
+while true; do
+    case $1 in
+	-s|--setup)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/setup-for-phantom-vm $2
+       	    exit 0
+	    ;;
+	-c|--create)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/create-phantom-vm
+	    exit 0
+	    ;;
+	-r|--remove)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/remove-phantom-vm-setup
+	    exit 0
+	    ;;
+	-h|--help)
+	    show_help
+	    exit 0
+	    ;;
+	*)
+	    echo "No action specified (--help for help)"
+	    exit 1
+	    ;;
+    esac
+done

@@ -1,0 +1,67 @@
+#!/bin/bash
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+
+show_help() {
+    echo -e " General:"
+    echo -e "\t-h, --help\t\t\tDisplay this help information"
+    echo -e " Actions:"
+    echo -e "\t-a, --add [hostname]\t\tAdd a Nimbus VMM node"
+    echo -e "\t-l, --list\t\t\tList current Nimbus VMM nodes"
+    echo -e "\t-r, --remove [hostname]\t\tRemove a Nimbus VMM node"
+    echo -e "\t-u, --update\t\t\tUpdate the Nimbus VMM nodes"
+    echo -e " Nimbus:"
+    echo -e "\t-c, --connect [hostname]\tConnect a Nimbus VMM node to the Nimbus head node"
+    echo -e "\t-d, --disconnect [hostname]\tDisconnect a Nimbus VMM node from the Nimbus head node"
+    echo -e "\t-i, --is-connected [hostname]\tCheck if a Nimbus VMM node is connected to the Nimbus head node"
+    exit 1
+}
+
+ARGS=$(getopt -o a:lr:uc:d:i:h -l add:,list,remove:,update,connect:,disconnect:,is-connected:,help -n $0 -- $@)
+
+if [ $? -ne 0 ]; then
+    exit 1
+fi
+
+eval set -- $ARGS
+
+while true; do
+    case $1 in
+	-a|--add)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/add-nimbus-vmm-node $2
+       	    exit 0
+	    ;;
+	-l|--list)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/list-nimbus-vmm-nodes
+	    exit 0
+	    ;;
+	-r|--remove)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/remove-nimbus-vmm-node $2
+	    exit 0
+	    ;;
+	-u|--update)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/update-nimbus-vmm-nodes
+	    exit 0
+	    ;;
+	-c|--connect)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/connect-nimbus-vmm-to-head $2
+	    exit 0
+	    ;;
+	-d|--disconnect)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/disconnect-nimbus-vmm-from-head $2
+	    exit 0
+	    ;;
+	-i|--is-connected)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/is-nimbus-vmm-connected-to-head $2
+	    exit 0
+	    ;;
+	-h|--help)
+	    show_help
+	    exit 0
+	    ;;
+	*)
+	    echo "No action specified (--help for help)"
+	    exit 1
+	    ;;
+    esac
+done

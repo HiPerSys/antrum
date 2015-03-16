@@ -1,0 +1,151 @@
+############################################
+### Master configuration file for aNTRuM ###
+############################################
+#
+#################################################################
+
+# Username for all nodes of the testbed
+TB_HOSTS_USERNAME="nimbus"
+
+# This string will be appended to the non-adhoc IP address of each testbed
+# host
+TB_HOSTS_WIRED_IP_APPEND="x"
+
+# For the scripts that require rebooting a host, this is the port that will
+# be used to listen for the host to signal that the reboot is complete
+TB_REBOOT_WAIT_PORT="9876"
+
+# File and directory paths on the master node
+#
+# The path for antrum
+TB_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+# The function libraries paths
+TB_BASH_FUNCTIONS_LIB_FILE="$TB_MGT_DIR/lib/functions.sh"
+TB_PYTHON_FUNCTIONS_LIB_FILE="$TB_MGT_DIR/lib/functions.py"
+# The path to the file that contains the testbed host information
+TB_HOSTS_FILE="$TB_MGT_DIR/var/testbed_hosts"
+
+# The testbed nodes home directory
+TB_HOSTS_HOME_DIR="/home/$TB_HOSTS_USERNAME"
+
+# The path to bash
+BASH_EXE="/bin/bash"
+
+# Package manager commands
+# (Changing these may break the scripts, as the names of the sofware may
+# be different for different package managers)
+TB_PACKAGE_MANAGER="apt-get"
+TB_PKG_MGR_UPDATE_CMD="sudo $TB_PACKAGE_MANAGER -q -y update"
+TB_PKG_MGR_INSTALL_CMD="sudo $TB_PACKAGE_MANAGER -q -y install"
+TB_PKG_MGR_REMOVE_CMD="sudo $TB_PACKAGE_MANAGER -q -y remove" 
+
+# The path for the auxillary scripts running on the testbed nodes
+# If changed, the path specified in the scripts that call the auxilary
+# scripts must be changed
+TB_HOSTS_EXTRA_SCRIPTS_DIR="/usr/local/bin"
+
+
+#################################################################
+#
+# OLSRd Scripts Configurations 
+#
+
+# Version of OLSRd to use
+TB_OLSRD_VERSION="0.6.7.1"
+
+# The name of the OLSRd configuration file to use (found in dist/olsrd/)
+TB_OLSRD_CONFIG_FILE_NAME="tb_olsrd.conf"
+
+# OLSRd network configuration
+#
+# The ad hoc network on which OLSRd will run. IP addresses will be
+# assigned to the wireless cards from this network.
+# Do not change this value, as it is hardcoded into other scripts
+TB_OLSR_NETWORK="172.29.0.0/16"
+# The ad hoc network netmask, set to include the network for the VMs
+TB_OLSR_NETMASK="255.252.0.0"
+# The ad hoc network wirless channel
+TB_OLSR_CHANNEL="1"
+# The ad hoc network ESSID
+TB_OLSR_ESSID="nimbusnodes"
+# The ad hoc network BSSID
+TB_OLSR_BSSID="02:ca:ff:ee:ba:be"
+
+# The path to the OLSRd software on the master node
+TB_OLSRD_TAR_FILE="$TB_MGT_DIR/dist/olsrd/olsrd-$TB_OLSRD_VERSION.tar.gz"
+
+# Paths to the OLSR and OLSRd directories on the testbed nodes
+TB_HOSTS_OLSR_DIR="$TB_HOSTS_HOME_DIR/olsr"
+TB_HOSTS_OLSRD_DIR="$TB_HOSTS_HOME_DIR/olsr/olsrd-$TB_OLSRD_VERSION"
+
+#################################################################
+#
+# Nimbus Scripts Configurations
+#
+
+# Versions of Nimbus software to use
+TB_NIMBUS_IAAS_VERSION="2.10.1"
+TB_NIMBUS_CLIENT_VERSION="022"
+
+# Domain name to use for Nimbus client setup
+TB_NIMBUS_CLIENT_DOMAIN="nimbustb"
+
+# Nimbus VM network configuration
+#
+# The hostname prefixes to use for for the public and private VM
+# network pools
+TB_NIMBUS_VMS_PUBLIC_HOST_PREFIX="pub"
+TB_NIMBUS_VMS_PRIVATE_HOST_PREFIX="priv"
+# The public and private networks from which IP addresses will be
+# assinged to the VMs. The public network is set so as to be
+# accessible from the testbed nodes ad hoc network
+# Mask bits value (/x) should be between 16 and 32
+TB_NIMBUS_VMS_PUBLIC_IP_NETWORK="172.30.0.0/23"
+TB_NIMBUS_VMS_PRIVATE_IP_NETWORK="10.30.0.0/23"
+# DNS server to use for access outisde the ad hoc network
+# If set to "none", VMs will have not internet connectivity
+# If this value is changed after the Nimbus head node is set up,
+# the nimbus head node update script will need to be run
+TB_NIMBUS_VMS_DNS_SERVER="none"
+# Testbed node to use as gateway for access outside the ad hoc
+# network
+# "default" is Nimbus head node. If changed, use an IP address
+# (e.g. 172.29.99.99)
+TB_NIMBUS_VMS_GATEWAY="default"
+
+# The paths to the Nimbus Head, VMM, and Client node softwares on
+# the master node
+TB_NIMBUS_HEAD_TAR_FILE="$TB_MGT_DIR/dist/nimbus/nimbus-iaas-$TB_NIMBUS_IAAS_VERSION-src.tar.gz"
+TB_NIMBUS_VMM_TAR_FILE="$TB_MGT_DIR/dist/nimbus/nimbus-iaas-controls-$TB_NIMBUS_IAAS_VERSION.tar.gz"
+TB_NIMBUS_CLIENT_TAR_FILE="$TB_MGT_DIR/dist/nimbus/nimbus-cloud-client-$TB_NIMBUS_CLIENT_VERSION.tar.gz"
+
+# Nimbus directory paths on the testbed nodes
+# (Changing these may break the scripts, as some are interdependent)
+# 
+# Nimbus directory
+TB_HOSTS_NIMBUS_DIR="$TB_HOSTS_HOME_DIR/nimbus"
+# Nimbus software source files directory
+TB_HOSTS_NIMBUS_SRC_DIR="$TB_HOSTS_HOME_DIR/nimbus-src"
+# Nimbus head node software directory
+TB_HOSTS_NIMBUS_HEAD_DIR="$TB_HOSTS_NIMBUS_DIR"
+# Nimbus head node software source files directory
+TB_HOSTS_NIMBUS_HEAD_SRC_DIR="$TB_HOSTS_NIMBUS_SRC_DIR/nimbus-iaas-$TB_NIMBUS_IAAS_VERSION-src"
+# Nimbus VMM node software directory
+TB_HOSTS_NIMBUS_VMM_DIR="$TB_HOSTS_NIMBUS_SRC_DIR/nimbus-iaas-controls-$TB_NIMBUS_IAAS_VERSION"
+# Nimbus Client software directory
+TB_HOSTS_NIMBUS_CLIENT_DIR="$TB_HOSTS_NIMBUS_DIR/nimbus-cloud-client-$TB_NIMBUS_CLIENT_VERSION"
+
+#################################################################
+#
+# Phantom Scripts Configurations
+# 
+
+# Path to the VM image file to be used to set up phantom
+TB_PHANTOM_VM_IMAGE_FILE="$TB_MGT_DIR/dist/phantom/phantom-ubuntu.gz"
+
+# Phantom file and directory paths on the testbed nodes
+#
+# Phantom directory
+TB_HOSTS_PHANTOM_DIR="$TB_HOSTS_HOME_DIR/phantom"
+# Configuration file to be used to set up Phantom
+TB_HOSTS_PHANTOM_CONF_FILE="$TB_HOSTS_PHANTOM_DIR/Phantom/plan/test.conf"

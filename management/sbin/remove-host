@@ -1,0 +1,53 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+    
+if ! prompt_accepted "Remove host \"$HOST_NAME\" from testbed?"; then
+    exit 1
+fi
+
+if [[ $2 != "-f" ]]; then
+
+    if tb_host_has_olsr_ip $HOST_NAME; then
+	$BASH_EXE $TB_MGT_DIR/sbin/remove-olsrd-host $HOST_NAME || :
+    fi
+    
+    echo "updating hosts file..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo sed -i \"/testbed wired network/,/^[[:blank:]]*$/d\" /etc/hosts 
+     sudo sed -i \"/testbed olsr network/,/^[[:blank:]]*$/d\" /etc/hosts"
+    
+    echo "removing passwordless sudo option..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP "sudo rm -f /etc/sudoers.d/$TB_HOSTS_USERNAME"
+    
+    echo "removing public key from authorized keys of host..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"sed -i \"/^.*$(echo $USER)@$(hostname)\$/d\" \$HOME/.ssh/authorized_keys"
+
+fi
+
+echo "removing host from hosts lists..."
+sudo sed -i "/^.*$HOST_NAME$TB_HOSTS_WIRED_IP_APPEND\?$/d" /etc/hosts
+ssh-keygen -R $HOST_NAME &> /dev/null
+ssh-keygen -R $HOST_IP &> /dev/null
+remove_testbed_host $HOST_NAME
+
+echo "host \"$HOST_NAME\" removed from testbed"
+
+echo "updating hosts..."
+$BASH_EXE $TB_MGT_DIR/sbin/update-hosts
+
+exit 0

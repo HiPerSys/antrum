@@ -1,0 +1,58 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_is_vmm_node $HOST_NAME; then
+    echo "Nimbus vmm not set up on host"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+echo "updating workspace-control.sh, dhcp-config.sh, and dhcpd.conf..."
+tmp_wscs_dir=$(ssh $TB_HOSTS_USERNAME@$HOST_IP "mktemp -d /tmp/tbmunvn.XXXXXXXX")
+scp -q $TB_MGT_DIR/dist/nimbus/vmm/workspace-control.sh $TB_HOSTS_USERNAME@$HOST_IP:$tmp_wscs_dir/
+scp -q $TB_MGT_DIR/dist/nimbus/vmm/dhcp-config.sh $TB_HOSTS_USERNAME@$HOST_IP:$tmp_wscs_dir/
+scp -q $TB_MGT_DIR/dist/nimbus/vmm/dhcp/dhcpd.conf $TB_HOSTS_USERNAME@$HOST_IP:$tmp_wscs_dir/
+scp -q $TB_MGT_DIR/dist/nimbus/vmm/*-vm-network $TB_HOSTS_USERNAME@$HOST_IP:$tmp_wscs_dir/
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo cp $tmp_wscs_dir/workspace-control.sh /opt/nimbus/bin/workspace-control.sh
+     sudo cp $tmp_wscs_dir/dhcp-config.sh /opt/nimbus/libexec/workspace-control/dhcp-config.sh
+     sudo cp $tmp_wscs_dir/dhcpd.conf /etc/dhcp/dhcpd.conf
+     sed -i \"s/wlan0/$(get_tb_host_wifi_iface $HOST_NAME)/g\" $tmp_wscs_dir/setup-vm-network
+     sudo cp $tmp_wscs_dir/*-vm-network $TB_HOSTS_EXTRA_SCRIPTS_DIR"
+
+echo "copying nimbus vmm configuration files..."
+scp -q $TB_MGT_DIR/dist/nimbus/vmm/conf/* \
+    $TB_HOSTS_USERNAME@$HOST_IP:/opt/nimbus/etc/workspace-control/
+
+echo "updating and starting resource information collector script..."
+tmp_orss_dir=$(ssh $TB_HOSTS_USERNAME@$HOST_IP "mktemp -d /tmp/tbmunvn.XXXXXXXXX")
+scp -q $TB_MGT_DIR/dist/nimbus/vmm/output-resource-status.py \
+    $TB_HOSTS_USERNAME@$HOST_IP:$tmp_orss_dir/
+scp -q $TB_MGT_DIR/dist/nimbus/vmm/ors-startup-script $TB_HOSTS_USERNAME@$HOST_IP:$tmp_orss_dir/
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo cp $tmp_orss_dir/output-resource-status.py /usr/bin/ors
+     sudo cp $tmp_orss_dir/ors-startup-script /etc/init.d/ors
+     sudo chmod +x /etc/init.d/ors
+     sudo update-rc.d ors defaults 99
+     sudo service ors restart" > /dev/null
+
+echo "cleaning up..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "rm -rf $tmp_wscs_dir
+     rm -rf $tmp_orss_dir"
+
+echo "script complete"
+exit 0

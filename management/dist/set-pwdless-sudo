@@ -1,0 +1,21 @@
+#!/bin/bash
+set -e
+
+if [[ $EUID -ne 0 ]]; then
+    echo "$0 must be run as root"
+    exit 1
+fi
+
+if [ -z "$1" ]; then
+    echo "No user specified"
+    exit 1
+fi
+
+USER=$1
+
+# Set passwordless sudo for USER
+echo -e "$USER\tALL=(ALL)NOPASSWD:ALL" > /tmp/$USER
+chmod 0440 /tmp/$USER
+visudo -c -f /tmp/$USER
+cp /tmp/$USER /etc/sudoers.d/$USER
+rm -f /tmp/$USER

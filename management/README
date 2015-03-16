@@ -1,0 +1,7 @@
+The first step for setting up the testbed management scripts for a new testbed is to run "setup/setup".
+
+The scripts for managing the testbed can be found in "bin".
+
+IMPORTANT: These scripts have only been tested in Ubuntu, so they may not work on other Linux distros.
+
+IMPORTANT: These scripts modify system files on the hosts used in the testbed, so it is best to use dedicated machines as testbed hosts.

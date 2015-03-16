@@ -1,0 +1,51 @@
+#!/bin/bash
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+
+show_help() {
+    echo -e " General:"
+    echo -e "\t-h, --help\t\t\tDisplay this help information"
+    echo -e " Actions:"
+    echo -e "\t-a, --add [hostname]\t\tAdd an OLSRd host"
+    echo -e "\t-l, --list\t\t\tList current OLSRd hosts"
+    echo -e "\t-r, --remove [hostname]\t\tRemove an OLSRd host"
+    echo -e "\t-u, --update\t\t\tUpdate all OLSRd hosts"
+    exit 1
+}
+
+ARGS=$(getopt -o a:lr:uh -l add:,list,remove:,update,help -n $0 -- $@)
+
+if [ $? -ne 0 ]; then
+    exit 1
+fi
+
+eval set -- $ARGS
+
+while true; do
+    case $1 in
+	-a|--add)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/add-olsrd-host $2
+       	    exit 0
+	    ;;
+	-l|--list)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/list-olsrd-hosts
+	    exit 0
+	    ;;
+	-r|--remove)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/remove-olsrd-host $2
+	    exit 0
+	    ;;
+	-u|--update)
+	    /bin/bash $TESTBED_MGT_DIR/sbin/update-olsrd-hosts
+	    exit 0
+	    ;;
+	-h|--help)
+	    show_help
+	    exit 0
+	    ;;
+	*)
+	    echo "No action specified (--help for help)"
+	    exit 1
+	    ;;
+    esac
+done

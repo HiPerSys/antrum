@@ -1,0 +1,50 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if tb_host_has_olsr_ip $HOST_NAME; then
+    echo "OLSRd already set up on host"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+echo "copying olsrd files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "mkdir -p $TB_HOSTS_OLSR_DIR"
+scp -q $TB_OLSRD_TAR_FILE $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_OLSRD_DIR.tar.gz
+
+echo "installing dependencies..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "$TB_PKG_MGR_UPDATE_CMD
+     command -v make > /dev/null 2>&1 || $TB_PKG_MGR_INSTALL_CMD make
+     command -v bison > /dev/null 2>&1 || $TB_PKG_MGR_INSTALL_CMD bison
+     command -v flex > /dev/null 2>&1 || $TB_PKG_MGR_INSTALL_CMD flex" &> /dev/null
+reboot_and_wait_if_needed $HOST_NAME
+
+echo "setting up olsrd..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "tar -xf $TB_HOSTS_OLSRD_DIR.tar.gz -C $TB_HOSTS_OLSR_DIR
+     cd $TB_HOSTS_OLSRD_DIR; make;
+     sudo ln $TB_HOSTS_OLSRD_DIR/olsrd /usr/bin/olsrd" > /dev/null
+
+echo "updating host..."
+set_tb_host_olsr_ip $HOST_NAME "TMPNE"
+$BASH_EXE $TB_MGT_DIR/sbin/update-olsrd-host $HOST_NAME
+
+echo "olsrd set up on \"$HOST_NAME\""
+
+echo "updating hosts..."
+$BASH_EXE $TB_MGT_DIR/sbin/update-hosts
+
+exit 0

@@ -1,0 +1,89 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+if ! tb_host_head_node_exists; then
+    echo "No head node found in testbed"
+    exit 1
+fi
+
+HOST_NAME=$(get_testbed_head_node)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+echo "creating network pool files..."
+echo "creating public..."
+[ -d $TB_MGT_DIR/dist/nimbus/head/network ] || mkdir $TB_MGT_DIR/dist/nimbus/head/network
+echo "# DNS IP address (or 'none'):" > $TB_MGT_DIR/dist/nimbus/head/network/public
+echo $TB_NIMBUS_VMS_DNS_SERVER >> $TB_MGT_DIR/dist/nimbus/head/network/public
+echo -e "\n# hostname ipaddress gateway broadcast subnetmask [MAC]\n" \
+    >> $TB_MGT_DIR/dist/nimbus/head/network/public
+vm_gw=$TB_NIMBUS_VMS_GATEWAY
+if [[ $vm_gw == "default" ]]; then
+    vm_gw=$(get_tb_host_olsr_ip $HOST_NAME)
+fi
+no_ips=$(get_no_ips_in_network $TB_NIMBUS_VMS_PUBLIC_IP_NETWORK)
+vm_no=1
+for vm_ip in $(get_ips_in_network $TB_NIMBUS_VMS_PUBLIC_IP_NETWORK); do
+    if [[ $vm_no == 1 ]] || [[ $vm_no -gt $(($no_ips-1)) ]]; then
+	vm_no=$(($vm_no+1))
+	continue
+    fi
+    echo "$TB_NIMBUS_VMS_PUBLIC_HOST_PREFIX$(printf %02d $vm_no) $vm_ip $vm_gw none $TB_OLSR_NETMASK" \
+	>> $TB_MGT_DIR/dist/nimbus/head/network/public
+    vm_no=$(($vm_no+1))
+    print_status_bar $vm_no $no_ips
+done
+echo "creating private..."
+echo "# DNS IP address (or 'none'):" > $TB_MGT_DIR/dist/nimbus/head/network/private
+echo "none" >> $TB_MGT_DIR/dist/nimbus/head/network/private
+echo -e "\n# hostname ipaddress gateway broadcast subnetmask [MAC]\n" \
+    >> $TB_MGT_DIR/dist/nimbus/head/network/private
+no_ips=$(get_no_ips_in_network $TB_NIMBUS_VMS_PRIVATE_IP_NETWORK)
+vm_no=1
+for vm_ip in $(get_ips_in_network $TB_NIMBUS_VMS_PRIVATE_IP_NETWORK); do
+    if [[ $vm_no == 1 ]] || [[ $vm_no -gt $(($no_ips-1)) ]]; then
+	vm_no=$(($vm_no+1))
+	continue
+    fi
+    echo "$TB_NIMBUS_VMS_PRIVATE_HOST_PREFIX$(printf %03d $vm_no) $vm_ip none none $TB_OLSR_NETMASK" \
+	>> $TB_MGT_DIR/dist/nimbus/head/network/private
+    vm_no=$(($vm_no+1))
+    print_status_bar $vm_no $no_ips
+done
+
+echo "updating files..."
+scp -q $TB_MGT_DIR/dist/nimbus/head/network/* \
+    $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_HEAD_DIR/services/etc/nimbus/workspace-service/network-pools/
+scp -q $TB_MGT_DIR/dist/nimbus/head/var/cloud.properties.in \
+    $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_HEAD_DIR/var/cloud.properties.in
+tmp_md_conf=`mktemp /tmp/tbmunhn.XXXXXXX`
+cp $TB_MGT_DIR/dist/nimbus/head/conf/metadata.conf.template $tmp_md_conf
+sed -i "s/@HOST@/$HOST_IP/g" $tmp_md_conf
+scp -q $tmp_md_conf \
+    $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_HEAD_DIR/services/etc/nimbus/workspace-service/metadata.conf
+scp -q $TB_MGT_DIR/dist/nimbus/head/conf/*.conf \
+    $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_HEAD_DIR/services/etc/nimbus/workspace-service/
+scp -q $TB_MGT_DIR/dist/nimbus/head/elastic/other/other-elastic.conf \
+    $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_HEAD_DIR/services/etc/nimbus/elastic/other/other-elastic.conf
+scp -q $TB_MGT_DIR/dist/nimbus/head/elastic/elastic.conf \
+    $TB_HOSTS_USERNAME@$HOST_IP:$TB_HOSTS_NIMBUS_HEAD_DIR/services/etc/nimbus/elastic/elastic.conf
+ssh $TB_HOSTS_USERNAME@$HOST_IP "sed -i \"s/^details.hostname=.*$/details.hostname=true/\" \
+     $TB_HOSTS_NIMBUS_HEAD_DIR/services/etc/nimbus/workspace-service/other/common.conf"
+
+echo "restarting nimbus..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "$TB_HOSTS_NIMBUS_HEAD_DIR/bin/nimbusctl restart"
+
+if [[ $TB_NIMBUS_VMS_DNS_SERVER == 'none' ]]; then
+    echo "updating netsample file..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"echo \"dns: 1.1.1.1\" >> $TB_HOSTS_NIMBUS_HEAD_DIR/services/var/nimbus/control.netsample.txt"
+fi
+
+echo "cleaning up..."
+rm -f $tmp_md_conf
+
+echo "script complete"
+exit 0

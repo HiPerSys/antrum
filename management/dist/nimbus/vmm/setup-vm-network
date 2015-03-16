@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Created by: Joshua McKee
+#
+# Sets up a TAP interface for a VM to use to bridge a wireless interface. The 
+# interface is created and assigned an IP address in the same network as the 
+# VM's Ip address. IP forwarding is enabled, and proxy ARP is enabled for the 
+# TAP and wifi interfaces. A route for the VM's IP address is created for the 
+# TAP device. Needs to run
+#  (1) before the VM is created and 
+#  (2) before Nimbus restarts the local dhcp server.
+# Meant to be paired with cleanup-vm-network.
+# Arguments:
+#  $1 - The name of the TAP device
+#  $2 - The IP address of the VM
+#
+# NOTE: Passwordless sudo required for script to run properly!
+
+nic=$1
+vm_ip=$2
+
+sudo tunctl -u $EUID -t $nic
+
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo sysctl -w net.ipv4.conf.$nic.proxy_arp=1
+sudo sysctl -w net.ipv4.conf.wlan0.proxy_arp=1
+
+#Use an IP address outside the range of available VM IPs
+nic_ip=`echo $vm_ip | awk -F '.' '{printf("%d.%d.%d.%d",$1,$2+1,$3,$4)}'`
+
+sudo ip addr add $nic_ip dev $nic
+sudo ip link set $nic up
+
+sudo route add -host $vm_ip dev $nic
+
+exit 0

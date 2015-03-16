@@ -1,0 +1,53 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+NEW_HOST_IP=$1
+
+if ! is_valid_ip $NEW_HOST_IP; then
+    echo "Invalid IP address"
+    exit 1
+fi
+
+if is_testbed_host $NEW_HOST_IP; then
+    echo "Host already added"
+    exit 1
+fi
+
+echo "adding public key to authorized keys of new host..."
+cat $HOME/.ssh/id_rsa.pub | ssh $TB_HOSTS_USERNAME@$NEW_HOST_IP \
+    "[ -d \$HOME/.ssh ] || mkdir \$HOME/.ssh
+     [ -f \$HOME/.ssh/authorized_keys ] || touch \$HOME/.ssh/authorized_keys
+     sed -i \"/^.*$(echo $USER)@$(hostname)\$/d\" \$HOME/.ssh/authorized_keys; 
+     cat - >> \$HOME/.ssh/authorized_keys;"
+
+echo "modifying sudoers file for passwordless sudo..."
+scp -q $TB_MGT_DIR/dist/set-pwdless-sudo $TB_HOSTS_USERNAME@$NEW_HOST_IP:/tmp/sps
+ssh -t $TB_HOSTS_USERNAME@$NEW_HOST_IP "sudo /tmp/sps $TB_HOSTS_USERNAME"
+
+echo "adding new host to hosts lists..."
+NEW_HOST_NAME=`ssh $TB_HOSTS_USERNAME@$NEW_HOST_IP "hostname"`
+
+if is_testbed_host $NEW_HOST_NAME; then
+    echo "Host already added"
+    exit 1
+fi
+
+echo "updating host files..."
+add_testbed_host $NEW_HOST_NAME
+set_tb_host_wired_ip $NEW_HOST_NAME $NEW_HOST_IP
+grep -Fqw "$NEW_HOST_IP$TB_HOSTS_WIRED_IP_APPEND" /etc/hosts || \
+    sudo sed -i "/testbed wired network/a $NEW_HOST_IP\t$NEW_HOST_NAME$TB_HOSTS_WIRED_IP_APPEND" /etc/hosts
+
+echo "cleaning up..."
+ssh $TB_HOSTS_USERNAME@$NEW_HOST_IP "rm -f /tmp/sps"
+
+echo "new host \"$NEW_HOST_NAME\" added to testbed"
+
+echo "updating hosts..."
+$BASH_EXE $TB_MGT_DIR/sbin/update-hosts
+
+exit 0

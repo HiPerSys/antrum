@@ -1,0 +1,101 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi
+
+if ! tb_host_is_client_node $HOST_NAME; then
+    echo "The host is not a client node"
+    exit 1
+fi
+
+if ! tb_host_head_node_exists; then
+    echo "No head node found in testbed"
+    exit 1
+fi
+
+if ! tb_host_vmm_node_exists; then
+    echo "No vmm node found in testbed"
+    exit 1
+fi
+
+if tb_host_phantom_vm_exists; then
+    echo "Phantom vm already running"
+    exit 1
+fi
+
+if [ ! -f $TB_PHANTOM_VM_IMAGE_FILE ]; then
+    echo "ERROR: The image file to be used for Phantom does not exist. Please
+create a KVM compatible, Ubuntu 13.10 64-bit server VM image, and
+place it at the following location: 
+$TB_PHANTOM_VM_IMAGE_FILE
+The image must have git and chef installed on it."
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+HEAD_NODE_NAME=$(get_testbed_head_node)
+HEAD_NODE_IP=$(get_tb_host_wired_ip $HEAD_NODE_NAME)
+
+echo "creating the phantom folder..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "mkdir -p $TB_HOSTS_PHANTOM_DIR"
+
+echo "installing dependencies..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "$TB_PKG_MGR_UPDATE_CMD
+     $TB_PKG_MGR_INSTALL_CMD python-dev
+     $TB_PKG_MGR_INSTALL_CMD git
+     command -v virtualenv > /dev/null 2>&1 || $TB_PKG_MGR_INSTALL_CMD python-virtualenv" \
+	 &> /dev/null
+reboot_and_wait_if_needed $HOST_NAME
+
+echo "downloading the Phantom setup files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cd $TB_HOSTS_PHANTOM_DIR
+     git clone -q https://github.com/nimbusproject/Phantom.git
+     cd $TB_HOSTS_PHANTOM_DIR/Phantom
+     git checkout -q ubuntu"
+
+# Workaround for bug described here: https://bugs.launchpad.net/ubuntu/+source/openjdk-6/+bug/1006776
+if ! $(ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "grep -q \"#.*security.provider.9\" /etc/java-*-openjdk/security/java.security"); then
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"sudo sed -i \"s/\(^security.provider.9.*$\)/# \1/\" /etc/java-*-openjdk/security/java.security"
+    reboot_and_wait $HOST_NAME
+fi
+
+echo "adding the phantom vm image to nimbus..."
+scp -q $TB_PHANTOM_VM_IMAGE_FILE $TB_HOSTS_USERNAME@$HOST_IP:/tmp/phantom.gz
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "$TB_HOSTS_NIMBUS_CLIENT_DIR/bin/cloud-client.sh --transfer --sourcefile /tmp/phantom.gz --common" > /dev/null
+
+echo "setting up access keys..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "[ -d \$HOME/.secrets ] || mkdir \$HOME/.secrets"
+ssh $TB_HOSTS_USERNAME@$HOST_IP "cat $TB_HOSTS_NIMBUS_CLIENT_DIR/conf/cloud.properties" | \
+    grep s3id | sed 's/.*=//' | ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cat - | tee \$HOME/.secrets/NIMBUS_ACCESS_KEY_ID > /dev/null"
+ssh $TB_HOSTS_USERNAME@$HOST_IP "cat $TB_HOSTS_NIMBUS_CLIENT_DIR/conf/cloud.properties" | \
+    grep s3key | sed 's/.*=//' | ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cat - | tee \$HOME/.secrets/NIMBUS_SECRET_ACCESS_KEY > /dev/null"
+
+echo "cleaning up..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP "rm -f /tmp/phantom.gz"
+rm -f $tmp_creds
+
+echo "updating host list..."
+set_tb_host_as_phantom_vm_node $HOST_NAME
+
+echo "phantom is setup to run using \"$HOST_NAME\""
+
+exit 0

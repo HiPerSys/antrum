@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# Created by: Joshua McKee
+#
+# Removes an entry from the hosts file for a VM terminated by the cloud client.
+# Meant to be used with cloud-client.sh
+# Meant to be paired with remove-host-entry
+# Arguments:
+#  $1 - The vm handle
+#
+# NOTE: Passwordless sudo required for script to run properly!
+
+vm_handle=$1
+
+sudo sed -i "/^.*\t# $vm_handle.*$/d" /etc/hosts
+
+exit 0

@@ -1,0 +1,16 @@
+#!/bin/bash
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+echo "updating olsrd hosts settings..."
+for host in $(get_olsr_testbed_hosts); do
+    echo "updating host \"$host\"..."
+    $BASH_EXE $TB_MGT_DIR/sbin/update-olsrd-host $host
+done
+
+echo "updating hosts..."
+$BASH_EXE $TB_MGT_DIR/sbin/update-hosts
+
+exit 0

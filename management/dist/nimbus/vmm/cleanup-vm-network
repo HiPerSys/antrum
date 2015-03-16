@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Created by: Joshua McKee
+#
+# Removes the TAP interface used by a VM for bridging a wireless interface.
+# Needs to run after the VM is destroyed.
+# Meant to be paired with setup-vm-network.
+# Arguments:
+#  $1 - The name of the TAP device
+#
+# NOTE: Passwordless sudo required for script to run properly!
+
+nic=$1
+
+sudo ifconfig $nic down
+sudo tunctl -u $EUID -d $nic
+
+# Note that route and proxy ARP for interface are automatically removed.
+# Note that IP forwarding and proxy ARP are not disabled, since another VM may 
+# be running.
+
+exit 0

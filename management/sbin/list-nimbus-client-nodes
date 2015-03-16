@@ -1,0 +1,9 @@
+#!/bin/bash
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+
+echo -e "HOST\tWIRED IP\tOLSR IP\t\tOLSR IFACE\tNODE TYPE"
+cat $TB_HOSTS_FILE | grep -Fw "CLIENT"
+
+exit 0

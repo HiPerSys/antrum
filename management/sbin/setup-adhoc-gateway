@@ -1,0 +1,40 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+if [ $# -eq 0 ]; then
+    GW_IP=$TB_NIMBUS_VMS_GATEWAY
+else
+    GW_IP=$1
+fi
+
+if [[ $GW_IP == "default" ]]; then
+    if ! tb_host_head_node_exists; then
+	echo "No head node found in testbed"
+	exit 1
+    fi
+    HOST_NAME=$(get_testbed_head_node)
+    HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)    
+else
+    if ! is_testbed_host $GW_IP; then
+	echo "Host to be gateway not found in testbed"
+	exit 1
+    fi
+    HOST_NAME=$(get_tb_host_name $GW_IP)
+    HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+fi
+
+echo "setting up gateway..."
+iface=$(ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "ifconfig | grep -B 1 $HOST_IP | head -1 | awk '{print \$1}'")
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "sudo sysctl -w net.ipv4.ip_forward=1 > /dev/null
+     sudo iptables -t nat -C POSTROUTING -s 172.29.0.0/14 -o $iface -j MASQUERADE &> /dev/null ||
+     sudo iptables -t nat -A POSTROUTING -s 172.29.0.0/14 -o $iface -j MASQUERADE"
+
+echo "host \"$HOST_NAME\" set up as adhoc gateway"
+
+exit 0

@@ -1,0 +1,49 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+if ! tb_host_phantom_vm_exists; then
+    echo "Phantom vm not set up"
+    exit 1
+fi 
+
+HOST_NAME=$(get_testbed_phantom_vm_node)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+HEAD_NODE_NAME=$(get_testbed_head_node)
+HEAD_NODE_IP=$(get_tb_host_wired_ip $HEAD_NODE_NAME)
+
+if ! prompt_accepted "Remove Phantom VM setup?"; then
+    exit 1
+fi
+
+echo "removing files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "rm -rf $TB_HOSTS_PHANTOM_DIR
+     rm -rf \$HOME/.secrets"
+
+if tb_host_head_node_exists; then
+    echo "removing the phantom vm images from nimbus..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"$TB_HOSTS_NIMBUS_CLIENT_DIR/bin/cloud-client.sh --delete --name phantom.gz --common" > /dev/null
+fi
+
+echo "removing dependencies..."
+if prompt_accepted "virtualenv and git were installed for Phantom, but are no longer needed. Remove?"; then
+    echo "removing virtualenv..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"$TB_PKG_MGR_REMOVE_CMD python-virtualenv git" \
+	&> /dev/null
+    reboot_and_wait_if_needed $HOST_NAME
+fi
+
+echo "updating host list..."
+unset_tb_host_as_phantom_vm_node $HOST_NAME
+
+echo "phantom vm setup has been removed from \"$HOST_NAME\""
+
+echo "script complete"
+exit 0

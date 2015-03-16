@@ -1,0 +1,54 @@
+#!/bin/bash
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+if $(source $TESTBED_MGT_DIR/etc/main.conf &> /dev/null); then
+    source $TESTBED_MGT_DIR/etc/main.conf
+else
+    source $TESTBED_MGT_DIR/etc/main.conf.example
+fi
+
+if [ -f $TB_HOSTS_FILE ]; then
+    echo "Setup already run"
+    exit 1;
+fi
+
+echo "setting up passwordless sudo..."
+sudo $TB_MGT_DIR/dist/set-pwdless-sudo $(whoami)
+
+echo "installing necessary software..."
+$TB_PKG_MGR_UPDATE_CMD
+$TB_PKG_MGR_INSTALL_CMD python-dev python-netaddr
+
+if [ ! -f $HOME/.ssh/id_rsa ]; then
+    echo "setting up rsa keys..."
+    ssh-keygen -f $HOME/.ssh/id_rsa -N ''
+fi
+
+if [ ! -f $TESTBED_MGT_DIR/etc/main.conf ]; then
+    echo "creating config file..."
+    cp $TESTBED_MGT_DIR/etc/main.conf.example $TESTBED_MGT_DIR/etc/main.conf
+fi
+
+if ! $(grep -Fqw "# testbed wired network" /etc/hosts); then
+    echo "adding heading to /etc/hosts file..."
+    echo -e "\n# testbed wired network\n\n# testbed olsr network" | sudo tee -a /etc/hosts > /dev/null
+fi
+
+echo "creating testbed hosts file..."
+mkdir $TESTBED_MGT_DIR/var
+touch $TB_HOSTS_FILE
+
+echo "downloading OLSRd setup files..."
+cd $TB_MGT_DIR/dist/olsrd/
+curl -O http://www.olsr.org/releases/0.6/olsrd-$TB_OLSRD_VERSION.tar.gz
+echo "downloading Nimbus setup files..."
+cd $TB_MGT_DIR/dist/nimbus/
+curl -O http://www.nimbusproject.org/downloads/nimbus-iaas-$TB_NIMBUS_IAAS_VERSION-src.tar.gz
+curl -O http://www.nimbusproject.org/downloads/nimbus-iaas-controls-$TB_NIMBUS_IAAS_VERSION.tar.gz
+curl -O http://www.nimbusproject.org/downloads/nimbus-cloud-client-$TB_NIMBUS_CLIENT_VERSION.tar.gz
+echo "downloading test VMM image..."
+cd $TB_MGT_DIR/dist/nimbus/vmm/
+curl -O http://www.nimbusproject.org/downloads/ubuntu10.10.gz
+
+echo "script complete"
+exit 0

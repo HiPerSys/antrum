@@ -1,0 +1,136 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+if ! tb_host_phantom_vm_exists; then
+    echo "Phantom vm not set up"
+    exit 1
+fi 
+
+if ! tb_host_head_node_exists; then
+    echo "No head node found in testbed"
+    exit 1
+fi
+
+if ! tb_host_vmm_node_exists; then
+    echo "No vmm node found in testbed"
+    exit 1
+fi
+
+if [[ $TB_NIMBUS_VMS_DNS_SERVER == 'none' ]]; then
+    echo "No DNS server specified (in main.conf)"
+    exit 1
+fi
+
+HOST_NAME=$(get_testbed_phantom_vm_node)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+HEAD_NODE_NAME=$(get_testbed_head_node)
+HEAD_NODE_IP=$(get_tb_host_wired_ip $HEAD_NODE_NAME)
+
+echo "setting up all VMM nodes as gateways for their VMs..."
+for host in $(get_testbed_vmm_nodes); do
+    $BASH_EXE $TB_MGT_DIR/sbin/setup-adhoc-gateway $host
+done
+
+echo "setting up the credentials file..."
+tmp_creds=`mktemp /tmp/tbmcpv.XXXXXXX`
+cp $TB_MGT_DIR/dist/phantom/phantom-creds.template $tmp_creds
+sed -i "s/@HOST@/$HEAD_NODE_NAME/g" $tmp_creds
+sed -i "s/@USER@/$TB_HOSTS_USERNAME/g" $tmp_creds
+cat $tmp_creds | ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cat - > $TB_HOSTS_PHANTOM_DIR/phantom-creds"
+
+echo "setting up the python virtual environment..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "cd $TB_HOSTS_PHANTOM_DIR
+     virtualenv .phantom
+     source $TB_HOSTS_PHANTOM_DIR/.phantom/bin/activate
+     pip install -U boto==2.34.0
+     pip install cloudinitd" > /dev/null
+
+echo "registering a nimbus keypair for phantom..."
+scp -q $TB_MGT_DIR/dist/phantom/nimbus-register-keypair $TB_HOSTS_USERNAME@$HOST_IP:/tmp/nrkp
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "source $TB_HOSTS_PHANTOM_DIR/.phantom/bin/activate
+     NIMBUS_HOSTNAME=\"$HEAD_NODE_NAME\" \
+     NIMBUS_IAAS_ACCESS_KEY=\$(cat \$HOME/.secrets/NIMBUS_ACCESS_KEY_ID) \
+     NIMBUS_IAAS_SECRET_KEY=\$(cat \$HOME/.secrets/NIMBUS_SECRET_ACCESS_KEY) \
+     /tmp/nrkp \"phantom\" \"\$HOME/.ssh/id_rsa.pub\"" > /dev/null
+
+echo "setting up hosts files..."
+tmp_vm_info=`mktemp /tmp/tbmcpv.XXXXXXXX`
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "$TB_HOSTS_NIMBUS_CLIENT_DIR/bin/cloud-client.sh --run --name phantom.gz --hours 1" \
+    > $tmp_vm_info
+vm_handle=$(cat $tmp_vm_info | grep "Creating workspace" | awk '{print $3}' | \
+    sed -e 's/^"//' -e 's/"...$//')
+vm_ip=$(cat $tmp_vm_info | grep "IP address" | awk '{print $3}')
+vm_hostname=$(cat $tmp_vm_info | grep "Hostname" | awk '{print $2}')
+sleep 60 # wait for VM to boot
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "echo -e \"\n$vm_ip\t$vm_hostname\" | \
+         ssh -o StrictHostKeyChecking=no root@$vm_ip \"cat - >> /etc/hosts\"
+     $TB_HOSTS_NIMBUS_CLIENT_DIR/bin/cloud-client.sh \
+         --save --handle $vm_handle --newname phantom-ready.gz &> /dev/null
+     sudo sed -i \"/testbed vms/a $vm_ip\t$vm_hostname\t# phantom-vm\" /etc/hosts"
+
+echo "extra prep..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "grep -q \"#.*packer\.conf\" $TB_HOSTS_PHANTOM_CONF_FILE ||
+     sudo sed -i \"s/\(^.*packer\.conf$\)/# \1/\" $TB_HOSTS_PHANTOM_CONF_FILE"
+
+echo "running cloudinit.d..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "source $TB_HOSTS_PHANTOM_DIR/.phantom/bin/activate
+     source $TB_HOSTS_PHANTOM_DIR/phantom-creds && cloudinitd -v boot $TB_HOSTS_PHANTOM_CONF_FILE" || :
+
+if $(ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "ssh -o StrictHostKeyChecking=no root@$vm_ip \
+         \"[ -f /tmp/nimbusready/newuser/newuser.sh ]\""); then
+    echo "configuring Phantom to work with Nimbus on test bed..."
+    nimbus_factory_id=$(ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"cat $TB_HOSTS_NIMBUS_CLIENT_DIR/conf/cloud.properties" | \
+         grep vws.factory.identity | sed 's/vws.factory.identity=//')
+    tmp_vm_files=`mktemp -d /tmp/tbmcpv.XXXXXXXXX`    
+    cp $TB_MGT_DIR/dist/phantom/vm/* $tmp_vm_files
+    sed -i "s/@HEAD_NODE@/$(get_tb_host_olsr_ip $HEAD_NODE_NAME)/g" \
+	$tmp_vm_files/*.template
+    sed -i "s|@FACTORY_ID@|$nimbus_factory_id|g" $tmp_vm_files/antrum.yml.template
+    mv $tmp_vm_files/test_add_user.py.template $tmp_vm_files/test_add_user.py
+    mv $tmp_vm_files/add_users.py.template $tmp_vm_files/add_users.py
+    mv $tmp_vm_files/antrum.yml.template $tmp_vm_files/antrum.yml
+    tmp_vm_files_remote=$(ssh $TB_HOSTS_USERNAME@$HOST_IP "mktemp -d /tmp/tbmcpv.XXXXXXXXXX")
+    scp -q $tmp_vm_files/* $TB_HOSTS_USERNAME@$HOST_IP:$tmp_vm_files_remote/
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"scp -q -o StrictHostKeyChecking=no \
+             $tmp_vm_files_remote/* root@$vm_ip:/home/epu/phantom/sandbox/FG/
+         ssh -o StrictHostKeyChecking=no root@$vm_ip \
+             \"cd /tmp/nimbusready/newuser
+               ./newuser.sh > /dev/null\"" \
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"echo \"Your Phantom credentials are:\"
+         scp -q -o StrictHostKeyChecking=no \
+             root@$vm_ip:/tmp/nimbusready/newuser/bootconf.json $tmp_vm_files_remote/
+         echo -n \"username: \"
+         cat $tmp_vm_files_remote/bootconf.json | grep PHANTOM_USERNAME | \
+             tr '\"' ' ' | awk '{ print \$3 }'
+         echo -n \"password: \"
+         cat $tmp_vm_files_remote/bootconf.json | grep PHANTOM_IAAS_SECRET_KEY | \
+             tr '\"' ' ' | awk '{ print \$3 }'"
+fi
+
+echo "cleaning up..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "$TB_HOSTS_NIMBUS_CLIENT_DIR/bin/cloud-client.sh --delete --name phantom-ready.gz" > /dev/null
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "rm -f /tmp/nrkp
+     rm -rf $tmp_vm_files_remote"
+rm -f $tmp_vm_info
+rm -rf $tmp_vm_files
+
+echo "script complete"
+exit 0

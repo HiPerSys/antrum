@@ -1,0 +1,64 @@
+#!/bin/bash
+set -e
+
+TESTBED_MGT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+source $TESTBED_MGT_DIR/etc/main.conf
+source $TB_BASH_FUNCTIONS_LIB_FILE
+
+HOST_NAME=$1
+
+if ! is_testbed_host $HOST_NAME; then
+    echo "Host not found in testbed"
+    exit 1
+fi 
+
+if ! tb_host_is_vmm_node $HOST_NAME; then
+    echo "Nimbus VMM not set up on host"
+    exit 1
+fi
+
+HOST_NAME=$(get_tb_host_name $HOST_NAME)
+HOST_IP=$(get_tb_host_wired_ip $HOST_NAME)
+
+if ! prompt_accepted "Remove Nimbus vmm from host \"$HOST_NAME\"?"; then
+    exit 1
+fi
+
+if tb_host_head_node_exists && is_vmm_connected_to_head $HOST_NAME; then
+    $BASH_EXE $TB_MGT_DIR/sbin/disconnect-nimbus-vmm-from-head $HOST_NAME
+fi
+
+echo "removing files..."
+ssh $TB_HOSTS_USERNAME@$HOST_IP \
+    "rm -rf $TB_HOSTS_NIMBUS_VMM_DIR
+     sudo rm -rf /opt/nimbus
+     rm -rf $TB_HOSTS_NIMBUS_VMM_DIR.tar.gz
+     sudo rm -f $TB_HOSTS_EXTRA_SCRIPTS_DIR/*-vm-network
+     sudo rm -f /usr/bin/ors
+     sudo update-rc.d -f ors remove > /dev/null
+     sudo rm -f /etc/init.d/ors"
+
+if prompt_accepted "apparmor was removed for Nimbus VMM. Reinstall it (Recommended)?"; then
+    echo "reinstalling apparmor..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"$TB_PKG_MGR_UPDATE_CMD
+         $TB_PKG_MGR_INSTALL_CMD apparmor" &> /dev/null
+    reboot_and_wait_if_needed $HOST_NAME
+fi
+
+echo "removing dependencies..."
+if prompt_accepted "libvirt, kvm, ubuntu-vm-builder, libcap, tunctl, and isc-dhcp-server were installed for Nimbus VMM, but are no longer needed. Remove?"; then
+    echo "removing libvirt, kvm, ubuntu-vm-builder, libcap, tunctl, and isc-dhcp-server..."
+    ssh $TB_HOSTS_USERNAME@$HOST_IP \
+	"$TB_PKG_MGR_REMOVE_CMD ubuntu-vm-builder libvirt-bin qemu-kvm libcap2-bin isc-dhcp-server uml-utilities" \
+	&> /dev/null
+    reboot_and_wait_if_needed $HOST_NAME
+fi
+
+echo "updating host list..."
+unset_tb_host_as_vmm_node $HOST_NAME
+
+echo "nimbus vmm removed from \"$HOST_NAME\""
+
+echo "script complete"
+exit 0
